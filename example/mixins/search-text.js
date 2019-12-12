@@ -1,3 +1,44 @@
+const buildCompositeJoins = (Model, joins, columnname) => {
+  let len = joins.length
+  let join = []
+  let keysSearch = []
+
+  for (let idx = 0; idx < len; idx++) {
+    let join = joins[idx]
+    let relationModel = Model.relations[join]
+    if (!relationModel) continue
+
+    let source = { model: relationModel.modelFrom.name.toLowerCase(), field: relationModel.keyFrom }
+    let des = { model: relationModel.modelTo.name.toLowerCase(), field: relationModel.keyTo }
+
+    let joinQuery = { source, des }
+    join.push(joinQuery)
+
+    let modelName = relationModel.modelTo.name.toLowerCase()
+    let field = `${modelName}.${columnname}`
+    let value = ''
+
+    keysSearch.push({
+      field, value
+    })
+  }
+
+  Model.refSearch = { join, keysSearch }
+}
+
+const getCompositeValue = (instance, fields, columnname) => {
+  let len = fields.length
+  let values = []
+  for (let idx = 0; idx < len; idx++) {
+    let field = fields[idx]
+    let value = instance[field] || ''
+    value = value.toLowerCase().trim()
+    values.push(value)
+  }
+
+  return values.join(' ').toLowerCase().trim()
+}
+
 /**
  * @example
  * import searchText from './search-text'
@@ -10,44 +51,20 @@
  * @param {array} searchFields a list of columns
  * @param {array} joinRelations a list of relations used for building join query
  */
-export default (Model, searchFields, joinRelations, columnName = 'searchfield') => {
-  Model.defineProperty(columnName, {type: String, required: false})
+export default (Model, searchFields, joinRelations, columnname = 'searchfield') => {
+  // defines new column
+  Model.defineProperty(columnname, { type: String, required: false })
 
+  // if table joins
   if (joinRelations && Array.isArray(joinRelations)) {
-    let refSearch = {}
-    refSearch.join = []
-    refSearch.keysSearch = []
-    let field = `${Model.name.toLowerCase()}.${columnName}`
-    refSearch.keysSearch.push({ field, value: ''})
-
-    joinRelations.forEach(obj => {
-      let relationObj = Model.relations[obj]
-      if (relationObj) {
-        var joinObj = {}                    
-        joinObj.source = { model: relationObj.modelFrom.name.toLowerCase(), field: relationObj.keyFrom }
-        joinObj.des = { model: relationObj.modelTo.name.toLowerCase(), field: relationObj.keyTo }
-        refSearch.join.push(joinObj)
-
-        let relField = `${relationObj.modelTo.name.toLowerCase()}.${columnName}`
-        refSearch.keysSearch.push({ field: relField, value: ''})
-      }
-    })
-    Model.refSearch = refSearch
+    buildCompositeJoins(Model, joinRelations, columnname)
   }
 
+  // update composite search value
   Model.observe('before save', async (ctx) => {
-    if (searchFields && Array.isArray(searchFields)) {
-      let searchText = ''
-      if (ctx.instance) {
-        searchFields.forEach(field => {
-          let fieldData = ctx.instance[field]
-          if (fieldData) {
-            searchText += fieldData.toLowerCase() + ' '
-          }
-        })
-        searchText = searchText.trim()
-        ctx.instance[columnName] = searchText
-      }
+    if (ctx.instance && searchFields && Array.isArray(searchFields)) {
+      let value = getCompositeValue(ctx.instance, searchFields, columnname)
+      ctx.instance[columnname] = value
     }
   })
 
@@ -57,13 +74,15 @@ export default (Model, searchFields, joinRelations, columnName = 'searchfield') 
 
     if (filter.where['$text']) {
       let paramValue = filter.where['$text'].search || ''
+
       if (ctx.Model.refSearch) {
         ctx.Model.refSearch.keysSearch.forEach(value => {
           value.value = paramValue.toLowerCase()
         })
         filter.where.refSearch = ctx.Model.refSearch
       } else {
-        filter.where[columnName] = {ilike:'%' + paramValue.toLowerCase() + '%'}
+        let ilike = `%${paramValue.toLowerCase()}%`
+        filter.where[columnname] = { ilike }
       }
       delete filter.where['$text']
     }
